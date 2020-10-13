@@ -45,25 +45,26 @@ class Frame():
 
         self.left_curverad = None  # Curvature value in meters for left lane
         self.left_curverad = None  # Curvature value in meters for right lane
+        self.avg_curverad = None  # Average curvature value in meters, represents the curvature in the middle of the road
 
-        # Distortion coefficients
-        self.ret = None
-        self.mtx = None
-        self.dist = None
-        self.rvecs = None
-        self.tvecs = None
+        self.dist_between_lanes = None  # Distance between lanes in pixels at the bottom of the image
+        self.dist_from_center_m = None  # Distance from the center of the lane in meters
+
+        # For distortion calculation
+        self.objpoints = []
+        self.imgpoints = []
 
         # IMAGE PIPELINE
         # As much for debugging as anything else, has the image at every step of the process
+        self.calculate_distortion()  # Calculate distortion coefficients
+        self.src = np.float32([[590, 450], [250, 690], [1075, 690], [690, 450]])
         if image is not None:
             self.original_img = image  # Original
             self.image_shape = self.original_img.shape  # Image shape
-            self.calculate_distortion()  # Calculate distortion coefficients
             self.undist_img = self.undistort(self.original_img)  # After distortion correction
             self.gray_img = cv2.cvtColor(self.undist_img, cv2.COLOR_RGB2GRAY)  # Gray image
             self.gray_image_shape = (self.gray_img.shape[1], self.gray_img.shape[0])  # Gray image shape reversed
             self.dst_offset = 280
-            self.src = np.float32([[612, 440], [250, 680], [1056, 680], [667, 440]])
             self.dst = np.float32([[self.dst_offset, 0], [self.dst_offset, self.gray_image_shape[1]],
                                    [self.gray_image_shape[0] - self.dst_offset, self.gray_image_shape[1]],
                                    [self.gray_image_shape[0] - self.dst_offset, 0]])
@@ -87,7 +88,6 @@ class Frame():
             self.gray_image_shape = None  # Gray image shape (reversed)
 
             self.dst_offset = 280
-            self.src = np.float32([[612, 440], [270, 680], [1056, 680], [670, 440]])
             self.dst = None
 
     def new_image(self, img):
@@ -98,12 +98,10 @@ class Frame():
         """
         self.original_img = img  # Original
         self.image_shape = self.original_img.shape  # Image shape
-        self.calculate_distortion()  # Calculate distortion coefficients
         self.undist_img = self.undistort(self.original_img)  # After distortion correction
         self.gray_img = cv2.cvtColor(self.undist_img, cv2.COLOR_RGB2GRAY)  # Gray image
         self.gray_image_shape = (self.gray_img.shape[1], self.gray_img.shape[0])  # Gray image shape reversed
         self.dst_offset = 280
-        self.src = np.float32([[612, 440], [250, 680], [1056, 680], [667, 440]])
         self.dst = np.float32([[self.dst_offset, 0], [self.dst_offset, self.gray_image_shape[1]],
                                [self.gray_image_shape[0] - self.dst_offset, self.gray_image_shape[1]],
                                [self.gray_image_shape[0] - self.dst_offset, 0]])
@@ -128,10 +126,6 @@ class Frame():
         objp = np.zeros((ny * nx, 3), np.float32)
         objp[:, :2] = np.mgrid[0:nx, 0:ny].T.reshape(-1, 2)
 
-        # Arrays to store object points and image points from all the images.
-        objpoints = []  # 3d points in real world space
-        imgpoints = []  # 2d points in image plane.
-
         # Make a list of calibration images
         images = glob.glob('camera_cal/calibration*.jpg')
 
@@ -145,13 +139,8 @@ class Frame():
 
             # If found, add object points, image points
             if ret == True:
-                objpoints.append(objp)
-                imgpoints.append(corners)
-
-        self.ret, self.mtx, self.dist, self.rvecs, self.tvecs = cv2.calibrateCamera(objpoints,
-                                                                                    imgpoints,
-                                                                                    self.image_shape[1::],
-                                                                                    None, None)
+                self.objpoints.append(objp)
+                self.imgpoints.append(corners)
 
     def undistort(self, img):
         """
@@ -159,7 +148,11 @@ class Frame():
         :param img: Image to be undistorted
         :return: An undistorted image
         """
-        return cv2.undistort(self.original_img, self.mtx, self.dist, None, self.mtx)
+        ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(self.objpoints,
+                                                           self.imgpoints,
+                                                           self.image_shape[1::],
+                                                           None, None)
+        return cv2.undistort(self.original_img, mtx, dist, None, mtx)
 
     def abs_sobel_thresh(self, orient='x', thresh=(0, 255)):
         """
@@ -188,10 +181,9 @@ class Frame():
         :param mag_thresh: Threshold for magnitude of the gradient
         :return: A binary immage with activated pixels for all within threshold
         """
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         # Take both Sobel x and y gradients
-        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
-        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
+        sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
+        sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
         # Calculate the gradient magnitude
         gradmag = np.sqrt(sobelx ** 2 + sobely ** 2)
         # Rescale to 8 bit
@@ -212,11 +204,9 @@ class Frame():
         :param thresh: Angular threshold in radians
         :return: A binary image containgin all pixesl with gradient direction in threshold
         """
-        # Grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         # Calculate the x and y gradients
-        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
-        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
+        sobelx = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
+        sobely = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
         # Take the absolute value of the gradient direction,
         # apply a threshold, and create a binary image result
         absgraddir = np.arctan2(np.absolute(sobely), np.absolute(sobelx))
@@ -272,20 +262,21 @@ class Frame():
         """
         imshape = self.undist_img.shape
 
-        vertices = np.array([[(200, imshape[0]), (600, 400), (700, 400), (imshape[1] - 100, imshape[0])]],
+        vertices = np.array([[(150, imshape[0]), (550, 450), (730, 450), (imshape[1] - 100, imshape[0])]],
                             dtype=np.int32)
-        region_masked = self.region_of_interest(self.undist_img, vertices)
         # Following functions currently unused but left in just in case they are useful later
         # gradx = self.abs_sobel_thresh(region_masked, orient='x', thresh=(10, 140))
         # grady = self.abs_sobel_thresh(region_masked, orient='y', thresh=(10, 140))
-        mag_binary = self.mag_thresh(region_masked, sobel_kernel=ksize, mag_thresh=(50, 200))
-        dir_binary = self.dir_threshold(region_masked, sobel_kernel=ksize, thresh=(0.7, 1.3))
-        hls_binary = self.hls_threshold(region_masked, thresh=(100, 255))
+        mag_binary = self.mag_thresh(self.gray_img, sobel_kernel=ksize, mag_thresh=(50, 200))
+        dir_binary = self.dir_threshold(self.gray_img, sobel_kernel=ksize, thresh=(0.7, 1.3))
+        hls_binary = self.hls_threshold(self.undist_img, thresh=(100, 255))
 
         combined = np.zeros_like(dir_binary)
         combined[(((mag_binary == 1) & (dir_binary == 1))) | (hls_binary == 1)] = 1
 
-        return combined
+        region_masked = self.region_of_interest(combined, vertices)
+
+        return region_masked
 
     def transform_image(self, img, inverse=False):
         """
@@ -481,6 +472,15 @@ class Frame():
             1]) ** 2) ** 1.5) / np.absolute(
             2 * self.right_fit_m[0])
 
+        self.avg_curverad = (self.left_curverad + self.right_curverad) / 2
+
+        left_xint = self.left_fit[0] * y_eval ** 2 + self.left_fit[1] * y_eval + self.left_fit[2]
+        right_xint = self.right_fit[0] * y_eval ** 2 + self.right_fit[1] * y_eval + self.right_fit[2]
+        self.dist_between_lanes = right_xint - left_xint
+        position = (left_xint + right_xint) / 2
+        dist_from_center = self.image_shape[1] / 2 - position
+        self.dist_from_center_m = dist_from_center * self.xm_per_pix
+
     def warp_boundaries(self):
         """
         Warp the lane lines back onto the undistorted image, draw curvature values on the image
@@ -491,48 +491,57 @@ class Frame():
 
         # Recast the x and y points into usable format for cv2.fillPoly()
         pts_left = np.array([np.transpose(np.vstack([self.left_fitx, self.ploty]))])
+
         pts_right = np.array([np.flipud(np.transpose(np.vstack([self.right_fitx, self.ploty])))])
         pts = np.hstack((pts_left, pts_right))
 
         # Draw the lane onto the warped blank image
         cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
 
+
         # Warp the blank back to original image space using inverse perspective matrix
         newwarp, M = self.transform_image(color_warp, inverse=True)
         # Combine the result with the original image
-        weighted =  cv2.addWeighted(self.undist_img, 1, newwarp, 0.3, 0)
+        weighted = cv2.addWeighted(self.undist_img, 1, newwarp, 0.3, 0)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        curve_string = "L: " + str(self.left_curverad) + ", R: " + str(self.right_curverad)
-        cv2.putText(weighted, curve_string, (30, 30), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        curve_string_l = "L: {:,.2f}".format(self.left_curverad)
+        curve_string_r = "R: {:,.2f}".format(self.right_curverad)
+        curve_string_a = "A: {:,.2f}".format(self.avg_curverad)
+        curve_string_d = "Dist from center: {:,.4f}".format(self.dist_from_center_m)
+        cv2.putText(weighted, curve_string_l, (30, 30), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(weighted, curve_string_r, (30, 70), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(weighted, curve_string_a, (30, 110), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(weighted, curve_string_d, (30, 150), font, 1, (255, 255, 255), 2, cv2.LINE_AA)
         return weighted
 
     def prep_next_line(self):
         """Bundle polynomial values and store for use in the next frame"""
-        return (self.left_fit, self.right_fit)
+        return self.left_fit, self.right_fit
+
 
 if __name__ == '__main__':
-    """
-    Perform operations on multiple images
+
+    """#Perform operations on multiple images
     
     images = glob.glob('test_images/*.jpg')
+
     for num, image in enumerate(images):
         img = mpimg.imread(image)
         frame = Frame(img)
         outpath = "output_images/test" + str(num) + ".jpg"
         plt.imshow(frame.final_img)
-        plt.savefig(outpath)"""
+        plt.savefig(outpath)
+        plt.clf()"""
 
-    """
-    Perform operations on one image and adjust output size
+
+    """# Perform operations on one image and adjust output size
     
     img = mpimg.imread('test_images/test2.jpg')
     frame = Frame(img)
-    plt.imshow(frame.warped_lines, cmap='gray')
-    plt.plot(frame.left_fitx, frame.ploty, color='red')
-    plt.plot(frame.right_fitx, frame.ploty, color='red')
-    fig = plt.gcf()
-    fig.set_size_inches(12.8, 7.2)
-    plt.savefig('output_images/test2_polyfit.jpg', dpi=100, bbox_inches='tight')"""
+    plt.imshow(frame.final_img)
+
+    plt.show()"""
+
 
     # Perform operations on a video
     frame = Frame()
